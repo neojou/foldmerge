@@ -8,6 +8,7 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.awt.Desktop
+import java.awt.Dimension
 import java.awt.EventQueue
 
 /**
@@ -28,13 +29,14 @@ fun main() {
         }
 
         val windowState = rememberWindowState(
-            size = DpSize(960.dp, 640.dp),
+            size = DpSize(1180.dp, 820.dp),
         )
         Window(
             onCloseRequest = ::exitApplication,
             title = AppVersion.APP_NAME,
             state = windowState,
         ) {
+            window.minimumSize = Dimension(960, 680)
             App(about)
         }
     }

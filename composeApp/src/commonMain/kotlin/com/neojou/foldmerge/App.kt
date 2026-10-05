@@ -92,9 +92,9 @@ fun App(about: AboutRequest = remember { AboutRequest() }) {
 
     AppTheme {
         when (val state = initState) {
-            AppInitState.Loading -> Text("Loading...")
+            AppInitState.Loading -> Text("載入中…")
             AppInitState.Ready -> HomeScreen(about)
-            is AppInitState.Error -> Text("Init failed: ${state.error.message ?: "unknown"}")
+            is AppInitState.Error -> Text("啟動失敗：${state.error.message ?: "未知錯誤"}")
         }
         if (about.visible) {
             AboutDialog(onDismiss = about::dismiss)
