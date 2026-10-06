@@ -159,7 +159,8 @@ class FoldSession(
     /**
      * Lists [path] and replaces that side's tree. The previous selection on that side is cleared.
      *
-     * The path is shown immediately. A slower listing for a previous path cannot overwrite a newer one.
+     * Directories start collapsed. The path is shown immediately. A slower listing for a previous
+     * path cannot overwrite a newer one.
      */
     suspend fun openRoot(side: Side, path: String) {
         val cleared = gate.withLock {
@@ -199,16 +200,15 @@ class FoldSession(
         }
         val request = gate.withLock {
             if (rootOf(side) != path) return@withLock null
-            val directories = nodes.filter { it.directory }.map { it.relativePath }.toSet()
             when (side) {
                 Side.Left -> {
                     leftNodes = nodes
-                    leftExpanded = directories
+                    leftExpanded = emptySet()
                     leftBusy = false
                 }
                 Side.Right -> {
                     rightNodes = nodes
-                    rightExpanded = directories
+                    rightExpanded = emptySet()
                     rightBusy = false
                 }
             }
@@ -255,6 +255,71 @@ class FoldSession(
 
     fun revert(index: Int) {
         decide(index, BlockDecision.Original)
+    }
+
+    /**
+     * Inserts an empty line above [lineNumber] on [side].
+     *
+     * [lineNumber] is the 1-based number shown for that side after block decisions.
+     * Those decisions are folded into the text, the diff is built again, and the decision map
+     * is cleared. Saving, or an open overwrite question, leaves the text unchanged.
+     */
+    fun insertBlankAbove(side: Side, lineNumber: Int) {
+        rewriteLine(side, lineNumber) { lines, index ->
+            ArrayList(lines).apply { add(index, "") }
+        }
+    }
+
+    /**
+     * Replaces [lineNumber] on [side] with [newLines].
+     *
+     * [newLines] may contain more than one line. An empty list is ignored, as is a replacement
+     * that does not change the line. Decisions are folded in, the diff is built again, and the
+     * decision map is cleared.
+     */
+    fun replaceLine(side: Side, lineNumber: Int, newLines: List<String>) {
+        if (newLines.isEmpty()) return
+        rewriteLine(side, lineNumber) { lines, index ->
+            ArrayList(lines).apply {
+                removeAt(index)
+                addAll(index, newLines)
+            }
+        }
+    }
+
+    /**
+     * Removes [lineNumber] on [side] and leaves every other line in place.
+     *
+     * Decisions are folded in, the diff is built again, and the decision map is cleared.
+     * Saving, or an open overwrite question, leaves the text unchanged.
+     */
+    fun deleteLine(side: Side, lineNumber: Int) {
+        rewriteLine(side, lineNumber) { lines, index ->
+            ArrayList(lines).apply { removeAt(index) }
+        }
+    }
+
+    private fun rewriteLine(
+        side: Side,
+        lineNumber: Int,
+        change: (List<String>, Int) -> List<String>,
+    ) {
+        if (saving || askOverwrite) return
+        val ready = phase as? ComparePhase.Ready ?: return
+        val left = applySide(ready.hunks, decisions, onLeft = true)
+        val right = applySide(ready.hunks, decisions, onLeft = false)
+        val source = if (side == Side.Left) left else right
+        val index = lineNumber - 1
+        if (index !in source.indices) return
+        val updated = change(source, index)
+        if (updated == source) return
+        phase = ready.copy(
+            hunks = diffHunks(
+                leftLines = if (side == Side.Left) updated else left,
+                rightLines = if (side == Side.Right) updated else right,
+            ),
+        )
+        decisions = emptyMap()
     }
 
     /**

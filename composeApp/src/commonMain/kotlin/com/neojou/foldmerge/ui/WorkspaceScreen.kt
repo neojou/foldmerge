@@ -39,6 +39,7 @@ import com.neojou.foldmerge.AboutRequest
 import com.neojou.foldmerge.AppVersion
 import com.neojou.foldmerge.model.FoldSession
 import com.neojou.foldmerge.model.Side
+import com.neojou.foldmerge.model.alignVisibleRows
 import com.neojou.foldmerge.model.entryName
 import com.neojou.foldmerge.model.visibleFileRows
 import com.neojou.foldmerge.platformWorkspaceAccess
@@ -46,8 +47,9 @@ import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
 /**
- * Masthead of two path cards and two indented file lists.
+ * Masthead of two path cards and the file lists.
  *
+ * When both directories are loaded, one list aligns matching names. Otherwise each side scrolls alone.
  * Selecting one file on each side opens a compare window. Closing that window keeps the block decisions.
  */
 @Composable
@@ -94,8 +96,38 @@ fun WorkspaceScreen(about: AboutRequest) {
         promptClose = false
     }
     val compareVisible = compareOpen && pairKey != null
-    val leftRows = visibleFileRows(session.leftNodes, session.leftExpanded)
-    val rightRows = visibleFileRows(session.rightNodes, session.rightExpanded)
+    val bothListed = session.leftRoot != null &&
+        session.rightRoot != null &&
+        !session.leftBusy &&
+        !session.rightBusy
+    val pairedRows = remember(
+        bothListed,
+        session.leftNodes,
+        session.rightNodes,
+        session.leftExpanded,
+        session.rightExpanded,
+    ) {
+        if (bothListed) {
+            alignVisibleRows(
+                session.leftNodes,
+                session.rightNodes,
+                session.leftExpanded,
+                session.rightExpanded,
+            )
+        } else {
+            null
+        }
+    }
+    val leftRows = if (pairedRows == null) {
+        visibleFileRows(session.leftNodes, session.leftExpanded)
+    } else {
+        emptyList()
+    }
+    val rightRows = if (pairedRows == null) {
+        visibleFileRows(session.rightNodes, session.rightExpanded)
+    } else {
+        emptyList()
+    }
     val places = remember { mutableStateMapOf<String, RowPlace>() }
     var leftListBounds by remember { mutableStateOf<Rect?>(null) }
     var rightListBounds by remember { mutableStateOf<Rect?>(null) }
@@ -191,60 +223,91 @@ fun WorkspaceScreen(about: AboutRequest) {
                 }
             }
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                FileListPane(
-                    title = "左側檔案",
-                    side = Side.Left,
-                    rootSelected = session.leftRoot != null,
-                    busy = session.leftBusy,
-                    rows = leftRows,
-                    expanded = session.leftExpanded,
-                    selectedPath = session.leftSelected,
-                    dropDirectory = dragging?.let { current ->
-                        if (current.side == Side.Right) dropDirectoryFor(current) else null
-                    },
-                    onToggle = { session.toggleExpanded(Side.Left, it) },
-                    onSelect = { path -> scope.launch { session.select(Side.Left, path) } },
-                    onDragStart = { path, position -> drag = DraggedFile(Side.Left, path, position) },
-                    onDragMove = { path, position -> drag = DraggedFile(Side.Left, path, position) },
-                    onDragFinish = ::finishDrag,
-                    onPlace = { place ->
-                        val key = placeKey(place.side, place.relativePath)
-                        if (places[key] != place) places[key] = place
-                    },
-                    onPlaceGone = { path -> places.remove(placeKey(Side.Left, path)) },
-                    onListBounds = { bounds -> if (leftListBounds != bounds) leftListBounds = bounds },
-                    modifier = Modifier.weight(1f),
-                )
-                Box(
-                    modifier = Modifier
-                        .width(1.dp)
-                        .fillMaxHeight()
-                        .background(MaterialTheme.colorScheme.outline),
-                )
-                FileListPane(
-                    title = "右側檔案",
-                    side = Side.Right,
-                    rootSelected = session.rightRoot != null,
-                    busy = session.rightBusy,
-                    rows = rightRows,
-                    expanded = session.rightExpanded,
-                    selectedPath = session.rightSelected,
-                    dropDirectory = dragging?.let { current ->
-                        if (current.side == Side.Left) dropDirectoryFor(current) else null
-                    },
-                    onToggle = { session.toggleExpanded(Side.Right, it) },
-                    onSelect = { path -> scope.launch { session.select(Side.Right, path) } },
-                    onDragStart = { path, position -> drag = DraggedFile(Side.Right, path, position) },
-                    onDragMove = { path, position -> drag = DraggedFile(Side.Right, path, position) },
-                    onDragFinish = ::finishDrag,
-                    onPlace = { place ->
-                        val key = placeKey(place.side, place.relativePath)
-                        if (places[key] != place) places[key] = place
-                    },
-                    onPlaceGone = { path -> places.remove(placeKey(Side.Right, path)) },
-                    onListBounds = { bounds -> if (rightListBounds != bounds) rightListBounds = bounds },
-                    modifier = Modifier.weight(1f),
-                )
+                if (pairedRows != null) {
+                    AlignedFileList(
+                        pairs = pairedRows,
+                        leftExpanded = session.leftExpanded,
+                        rightExpanded = session.rightExpanded,
+                        leftSelected = session.leftSelected,
+                        rightSelected = session.rightSelected,
+                        leftDropDirectory = dragging?.let { current ->
+                            if (current.side == Side.Right) dropDirectoryFor(current) else null
+                        },
+                        rightDropDirectory = dragging?.let { current ->
+                            if (current.side == Side.Left) dropDirectoryFor(current) else null
+                        },
+                        onToggle = { side, path -> session.toggleExpanded(side, path) },
+                        onSelect = { side, path -> scope.launch { session.select(side, path) } },
+                        onDragStart = { side, path, position -> drag = DraggedFile(side, path, position) },
+                        onDragMove = { side, path, position -> drag = DraggedFile(side, path, position) },
+                        onDragFinish = ::finishDrag,
+                        onPlace = { place ->
+                            val key = placeKey(place.side, place.relativePath)
+                            if (places[key] != place) places[key] = place
+                        },
+                        onPlaceGone = { side, path -> places.remove(placeKey(side, path)) },
+                        onListBounds = { left, right ->
+                            if (leftListBounds != left) leftListBounds = left
+                            if (rightListBounds != right) rightListBounds = right
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                } else {
+                    FileListPane(
+                        title = "左側檔案",
+                        side = Side.Left,
+                        rootSelected = session.leftRoot != null,
+                        busy = session.leftBusy,
+                        rows = leftRows,
+                        expanded = session.leftExpanded,
+                        selectedPath = session.leftSelected,
+                        dropDirectory = dragging?.let { current ->
+                            if (current.side == Side.Right) dropDirectoryFor(current) else null
+                        },
+                        onToggle = { session.toggleExpanded(Side.Left, it) },
+                        onSelect = { path -> scope.launch { session.select(Side.Left, path) } },
+                        onDragStart = { path, position -> drag = DraggedFile(Side.Left, path, position) },
+                        onDragMove = { path, position -> drag = DraggedFile(Side.Left, path, position) },
+                        onDragFinish = ::finishDrag,
+                        onPlace = { place ->
+                            val key = placeKey(place.side, place.relativePath)
+                            if (places[key] != place) places[key] = place
+                        },
+                        onPlaceGone = { path -> places.remove(placeKey(Side.Left, path)) },
+                        onListBounds = { bounds -> if (leftListBounds != bounds) leftListBounds = bounds },
+                        modifier = Modifier.weight(1f),
+                    )
+                    Box(
+                        modifier = Modifier
+                            .width(1.dp)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.outline),
+                    )
+                    FileListPane(
+                        title = "右側檔案",
+                        side = Side.Right,
+                        rootSelected = session.rightRoot != null,
+                        busy = session.rightBusy,
+                        rows = rightRows,
+                        expanded = session.rightExpanded,
+                        selectedPath = session.rightSelected,
+                        dropDirectory = dragging?.let { current ->
+                            if (current.side == Side.Left) dropDirectoryFor(current) else null
+                        },
+                        onToggle = { session.toggleExpanded(Side.Right, it) },
+                        onSelect = { path -> scope.launch { session.select(Side.Right, path) } },
+                        onDragStart = { path, position -> drag = DraggedFile(Side.Right, path, position) },
+                        onDragMove = { path, position -> drag = DraggedFile(Side.Right, path, position) },
+                        onDragFinish = ::finishDrag,
+                        onPlace = { place ->
+                            val key = placeKey(place.side, place.relativePath)
+                            if (places[key] != place) places[key] = place
+                        },
+                        onPlaceGone = { path -> places.remove(placeKey(Side.Right, path)) },
+                        onListBounds = { bounds -> if (rightListBounds != bounds) rightListBounds = bounds },
+                        modifier = Modifier.weight(1f),
+                    )
+                }
             }
         }
         if (dragging != null) {

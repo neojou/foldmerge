@@ -49,3 +49,13 @@ fun renderDocument(lines: List<String>, newline: String, trailingNewline: Boolea
     val body = lines.joinToString(separator = newline)
     return if (trailingNewline) body + newline else body
 }
+
+/**
+ * Lines typed or pasted into the line editor.
+ *
+ * Splits like [splitText]. A trailing newline does not add another blank line.
+ * An empty field is one empty line, so confirming it does not delete the row.
+ */
+fun linesFromEditor(text: String): List<String> {
+    return splitText(text).lines.ifEmpty { listOf("") }
+}

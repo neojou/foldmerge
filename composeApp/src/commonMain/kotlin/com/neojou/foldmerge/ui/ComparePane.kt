@@ -13,7 +13,10 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
@@ -21,26 +24,42 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.ExperimentalComposeUiApi
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerButton
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInRoot
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.neojou.foldmerge.CompareDecided
@@ -60,6 +79,7 @@ import com.neojou.foldmerge.diff.Hunk
 import com.neojou.foldmerge.diff.HunkKind
 import com.neojou.foldmerge.diff.firstRowOf
 import com.neojou.foldmerge.diff.hunkTitle
+import com.neojou.foldmerge.diff.linesFromEditor
 import com.neojou.foldmerge.diff.previewRows
 import com.neojou.foldmerge.diff.sideLines
 import com.neojou.foldmerge.model.ComparePhase
@@ -148,7 +168,7 @@ fun ComparePane(
         AlertDialog(
             onDismissRequest = onKeepEditing,
             title = { Text("有未儲存的變更") },
-            text = { Text("這些區塊決定還沒寫入檔案。關閉視窗後，決定仍會保留，可再打開比較。") },
+            text = { Text("這些變更還沒寫入檔案。關閉視窗後，變更仍會保留，可再打開比較。") },
             confirmButton = {
                 TextButton(onClick = onConfirmClose) { Text("關閉") }
             },
@@ -233,17 +253,81 @@ private fun ColumnScope.ReadyCompare(
         onNext = { jump(forward = true) },
         onSave = onSave,
     )
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.weight(1f).fillMaxWidth(),
+    var menu by remember { mutableStateOf<LineMenuState?>(null) }
+    var edit by remember { mutableStateOf<LineEditState?>(null) }
+    val density = LocalDensity.current
+    var listOrigin by remember { mutableStateOf(Offset.Zero) }
+    LaunchedEffect(listState.isScrollInProgress) {
+        if (listState.isScrollInProgress) menu = null
+    }
+    Box(
+        modifier = Modifier
+            .weight(1f)
+            .fillMaxWidth()
+            .onGloballyPositioned { coordinates -> listOrigin = coordinates.positionInRoot() },
     ) {
-        itemsIndexed(rows, key = { index, _ -> index }) { _, row ->
-            CompareRow(
-                row = row,
-                selected = selectedHunk == row.hunkIndex,
-                onSelect = { selectedHunk = row.hunkIndex },
-            )
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+        ) {
+            itemsIndexed(rows, key = { index, _ -> index }) { _, row ->
+                CompareRow(
+                    row = row,
+                    selected = selectedHunk == row.hunkIndex,
+                    onSelect = { selectedHunk = row.hunkIndex },
+                    onLineMenu = { side, lineNumber, text, positionInRoot ->
+                        val relative = positionInRoot - listOrigin
+                        menu = LineMenuState(
+                            side = side,
+                            lineNumber = lineNumber,
+                            text = text,
+                            offset = with(density) { DpOffset(relative.x.toDp(), relative.y.toDp()) },
+                        )
+                    },
+                )
+            }
         }
+        val open = menu
+        if (open != null) {
+            // A zero-size anchor at the pointer. The menu opens from that point, not from the list.
+            Box(modifier = Modifier.offset(open.offset.x, open.offset.y).size(0.dp)) {
+                DropdownMenu(expanded = true, onDismissRequest = { menu = null }) {
+                    DropdownMenuItem(
+                        text = { Text("新增空行") },
+                        onClick = {
+                            menu = null
+                            session.insertBlankAbove(open.side, open.lineNumber)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("編輯") },
+                        onClick = {
+                            menu = null
+                            edit = LineEditState(open.side, open.lineNumber, open.text)
+                        },
+                    )
+                    DropdownMenuItem(
+                        text = { Text("刪除") },
+                        onClick = {
+                            menu = null
+                            session.deleteLine(open.side, open.lineNumber)
+                        },
+                    )
+                }
+            }
+        }
+    }
+    edit?.let { current ->
+        EditLineDialog(
+            side = current.side,
+            lineNumber = current.lineNumber,
+            initial = current.text,
+            onConfirm = { lines ->
+                session.replaceLine(current.side, current.lineNumber, lines)
+                edit = null
+            },
+            onDismiss = { edit = null },
+        )
     }
     val selectedIndex = selectedHunk
     val selected = selectedIndex?.let { index -> phase.hunks.getOrNull(index) }
@@ -349,6 +433,7 @@ private fun CompareRow(
     row: AlignedRow,
     selected: Boolean,
     onSelect: () -> Unit,
+    onLineMenu: (Side, Int, String, Offset) -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -360,11 +445,12 @@ private fun CompareRow(
         SideCell(
             text = row.leftText,
             number = row.leftNumber,
-            onLeft = true,
+            side = Side.Left,
             equal = row.equal,
             decided = row.decided,
             deleted = row.deleted,
             selected = selected && !row.equal,
+            onLineMenu = onLineMenu,
             modifier = Modifier.weight(1f),
         )
         Box(
@@ -376,28 +462,54 @@ private fun CompareRow(
         SideCell(
             text = row.rightText,
             number = row.rightNumber,
-            onLeft = false,
+            side = Side.Right,
             equal = row.equal,
             decided = row.decided,
             deleted = row.deleted,
             selected = selected && !row.equal,
+            onLineMenu = onLineMenu,
             modifier = Modifier.weight(1f),
         )
     }
 }
 
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SideCell(
     text: String?,
     number: Int?,
-    onLeft: Boolean,
+    side: Side,
     equal: Boolean,
     decided: Boolean,
     deleted: Boolean,
     selected: Boolean,
+    onLineMenu: (Side, Int, String, Offset) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val pad = text == null && !deleted
+    val onLeft = side == Side.Left
+    val onMenu = rememberUpdatedState(onLineMenu)
+    val origin = remember { mutableStateOf(Offset.Zero) }
+    val lineText = text
+    val lineNumber = number
+    val secondary = if (lineText != null && lineNumber != null) {
+        Modifier.pointerInput(lineText, lineNumber) {
+            awaitPointerEventScope {
+                while (true) {
+                    val event = awaitPointerEvent()
+                    // Open after the click ends, so the menu is not dismissed by the same press.
+                    if (event.type != PointerEventType.Release || event.button != PointerButton.Secondary) {
+                        continue
+                    }
+                    val change = event.changes.firstOrNull() ?: continue
+                    change.consume()
+                    onMenu.value(side, lineNumber, lineText, origin.value + change.position)
+                }
+            }
+        }
+    } else {
+        Modifier
+    }
     Row(
         modifier = modifier
             .fillMaxHeight()
@@ -409,7 +521,9 @@ private fun SideCell(
                     decided = decided,
                     selected = selected,
                 ),
-            ),
+            )
+            .onGloballyPositioned { coordinates -> origin.value = coordinates.positionInRoot() }
+            .then(secondary),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Text(
@@ -433,6 +547,42 @@ private fun SideCell(
             maxLines = 1,
         )
     }
+}
+
+@Composable
+private fun EditLineDialog(
+    side: Side,
+    lineNumber: Int,
+    initial: String,
+    onConfirm: (List<String>) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var draft by remember(side, lineNumber, initial) { mutableStateOf(initial) }
+    val focus = remember { FocusRequester() }
+    LaunchedEffect(Unit) { focus.requestFocus() }
+    val title = if (side == Side.Left) "編輯左側第 $lineNumber 行" else "編輯右側第 $lineNumber 行"
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 120.dp, max = 280.dp)
+                    .focusRequester(focus),
+                textStyle = MaterialTheme.typography.bodyMedium,
+                minLines = 4,
+            )
+        },
+        confirmButton = {
+            TextButton(onClick = { onConfirm(linesFromEditor(draft)) }) { Text("完成") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) { Text("取消") }
+        },
+    )
 }
 
 @Composable
@@ -522,6 +672,19 @@ private fun cellColor(
         else -> CompareRight
     }
 }
+
+private data class LineMenuState(
+    val side: Side,
+    val lineNumber: Int,
+    val text: String,
+    val offset: DpOffset,
+)
+
+private data class LineEditState(
+    val side: Side,
+    val lineNumber: Int,
+    val text: String,
+)
 
 private fun decisionLabel(hunk: Hunk, decision: BlockDecision): String {
     if (decision == BlockDecision.Original) return "未決定"

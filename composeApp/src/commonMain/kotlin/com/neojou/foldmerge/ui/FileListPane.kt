@@ -32,8 +32,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInRoot
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.neojou.foldmerge.model.FileNode
 import com.neojou.foldmerge.model.FileRow
+import com.neojou.foldmerge.model.PairedFileRow
 import com.neojou.foldmerge.model.Side
 import com.neojou.foldmerge.model.entryName
 
@@ -154,6 +157,7 @@ fun FileListPane(
                                 side = side,
                                 expanded = row.node.relativePath in expanded,
                                 selected = row.node.relativePath == selectedPath,
+                                unpaired = false,
                                 dropTarget = dropDirectory != null &&
                                     dropDirectory.isNotEmpty() &&
                                     row.node.directory &&
@@ -174,10 +178,249 @@ fun FileListPane(
     }
 }
 
+/**
+ * Both file lists in one scroll, so equal names stay on the same row.
+ *
+ * A missing name is a blank cell. Each cell still selects, drags, and reports its own bounds.
+ * [onListBounds] receives the left and right halves of the list area, including the blank space
+ * below the rows.
+ */
 @Composable
-private fun EmptyListMessage(message: String) {
+fun AlignedFileList(
+    pairs: List<PairedFileRow>,
+    leftExpanded: Set<String>,
+    rightExpanded: Set<String>,
+    leftSelected: String?,
+    rightSelected: String?,
+    leftDropDirectory: String?,
+    rightDropDirectory: String?,
+    onToggle: (Side, String) -> Unit,
+    onSelect: (Side, String) -> Unit,
+    onDragStart: (Side, String, Offset) -> Unit,
+    onDragMove: (Side, String, Offset) -> Unit,
+    onDragFinish: () -> Unit,
+    onPlace: (RowPlace) -> Unit,
+    onPlaceGone: (Side, String) -> Unit,
+    onListBounds: (Rect?, Rect?) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    DisposableEffect(Unit) {
+        onDispose { onListBounds(null, null) }
+    }
     Box(
-        modifier = Modifier.fillMaxSize().padding(24.dp),
+        modifier = modifier
+            .fillMaxSize()
+            .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)),
+    ) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            Row(modifier = Modifier.fillMaxWidth()) {
+                ListTitle("左側檔案", Modifier.weight(1f))
+                ListTitle("右側檔案", Modifier.weight(1f))
+            }
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .onGloballyPositioned { coordinates ->
+                        val bounds = coordinates.boundsInRoot()
+                        val mid = bounds.left + bounds.width / 2f
+                        onListBounds(
+                            Rect(bounds.left, bounds.top, mid, bounds.bottom),
+                            Rect(mid, bounds.top, bounds.right, bounds.bottom),
+                        )
+                    },
+            ) {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    HalfWash(active = leftDropDirectory == "", modifier = Modifier.weight(1f))
+                    HalfWash(active = rightDropDirectory == "", modifier = Modifier.weight(1f))
+                }
+                if (pairs.isEmpty()) {
+                    Row(modifier = Modifier.fillMaxSize()) {
+                        EmptyListMessage("這個目錄沒有可顯示的檔案", Modifier.weight(1f))
+                        EmptyListMessage("這個目錄沒有可顯示的檔案", Modifier.weight(1f))
+                    }
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(bottom = 12.dp),
+                    ) {
+                        items(
+                            items = pairs,
+                            key = { pair -> pair.left?.relativePath ?: pair.right!!.relativePath },
+                        ) { pair ->
+                            val left = pair.left
+                            val right = pair.right
+                            Row(modifier = Modifier.fillMaxWidth()) {
+                                PairSlot(
+                                    node = left,
+                                    padPath = right?.relativePath,
+                                    side = Side.Left,
+                                    depth = pair.depth,
+                                    unpaired = left != null && right == null,
+                                    expanded = left != null && left.relativePath in leftExpanded,
+                                    selected = left != null && left.relativePath == leftSelected,
+                                    dropTarget = left != null &&
+                                        leftDropDirectory != null &&
+                                        leftDropDirectory.isNotEmpty() &&
+                                        left.directory &&
+                                        left.relativePath == leftDropDirectory,
+                                    onToggle = { onToggle(Side.Left, it) },
+                                    onSelect = { onSelect(Side.Left, it) },
+                                    onDragStart = { path, position -> onDragStart(Side.Left, path, position) },
+                                    onDragMove = { path, position -> onDragMove(Side.Left, path, position) },
+                                    onDragFinish = onDragFinish,
+                                    onPlace = onPlace,
+                                    onPlaceGone = { onPlaceGone(Side.Left, it) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                                PairSlot(
+                                    node = right,
+                                    padPath = left?.relativePath,
+                                    side = Side.Right,
+                                    depth = pair.depth,
+                                    unpaired = right != null && left == null,
+                                    expanded = right != null && right.relativePath in rightExpanded,
+                                    selected = right != null && right.relativePath == rightSelected,
+                                    dropTarget = right != null &&
+                                        rightDropDirectory != null &&
+                                        rightDropDirectory.isNotEmpty() &&
+                                        right.directory &&
+                                        right.relativePath == rightDropDirectory,
+                                    onToggle = { onToggle(Side.Right, it) },
+                                    onSelect = { onSelect(Side.Right, it) },
+                                    onDragStart = { path, position -> onDragStart(Side.Right, path, position) },
+                                    onDragMove = { path, position -> onDragMove(Side.Right, path, position) },
+                                    onDragFinish = onDragFinish,
+                                    onPlace = onPlace,
+                                    onPlaceGone = { onPlaceGone(Side.Right, it) },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .width(1.dp)
+                .fillMaxHeight()
+                .background(MaterialTheme.colorScheme.outline),
+        )
+    }
+}
+
+@Composable
+private fun ListTitle(title: String, modifier: Modifier = Modifier) {
+    Text(
+        text = title,
+        modifier = modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+        color = MaterialTheme.colorScheme.primary,
+        style = MaterialTheme.typography.labelLarge,
+        fontWeight = FontWeight.Medium,
+    )
+}
+
+@Composable
+private fun HalfWash(active: Boolean, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxHeight().background(
+            if (active) {
+                MaterialTheme.colorScheme.primary.copy(alpha = 0.08f)
+            } else {
+                MaterialTheme.colorScheme.surface.copy(alpha = 0f)
+            },
+        ),
+    )
+}
+
+@Composable
+private fun PairSlot(
+    node: FileNode?,
+    padPath: String?,
+    side: Side,
+    depth: Int,
+    unpaired: Boolean,
+    expanded: Boolean,
+    selected: Boolean,
+    dropTarget: Boolean,
+    onToggle: (String) -> Unit,
+    onSelect: (String) -> Unit,
+    onDragStart: (String, Offset) -> Unit,
+    onDragMove: (String, Offset) -> Unit,
+    onDragFinish: () -> Unit,
+    onPlace: (RowPlace) -> Unit,
+    onPlaceGone: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier.padding(horizontal = 8.dp)) {
+        if (node != null) {
+            FileRowItem(
+                row = FileRow(node = node, depth = depth),
+                side = side,
+                expanded = expanded && node.directory,
+                selected = selected,
+                unpaired = unpaired,
+                dropTarget = dropTarget,
+                onToggle = onToggle,
+                onSelect = onSelect,
+                onDragStart = onDragStart,
+                onDragMove = onDragMove,
+                onDragFinish = onDragFinish,
+                onPlace = onPlace,
+                onPlaceGone = onPlaceGone,
+            )
+        } else if (padPath != null) {
+            // Same height as a file row, and a file-shaped place so a drop here is refused.
+            BlankPad(
+                side = side,
+                relativePath = padPath,
+                onPlace = onPlace,
+                onPlaceGone = onPlaceGone,
+            )
+        }
+    }
+}
+
+@Composable
+private fun BlankPad(
+    side: Side,
+    relativePath: String,
+    onPlace: (RowPlace) -> Unit,
+    onPlaceGone: (String) -> Unit,
+) {
+    DisposableEffect(side, relativePath) {
+        onDispose { onPlaceGone(relativePath) }
+    }
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 1.dp)
+            .onGloballyPositioned { coordinates ->
+                onPlace(
+                    RowPlace(
+                        side = side,
+                        relativePath = relativePath,
+                        directory = false,
+                        bounds = coordinates.boundsInRoot(),
+                    ),
+                )
+            }
+            .padding(vertical = 6.dp),
+    ) {
+        Text(
+            text = " ",
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0f),
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+}
+
+@Composable
+private fun EmptyListMessage(message: String, modifier: Modifier = Modifier) {
+    Box(
+        modifier = modifier.fillMaxSize().padding(24.dp),
         contentAlignment = Alignment.TopStart,
     ) {
         Text(
@@ -194,6 +437,7 @@ private fun FileRowItem(
     side: Side,
     expanded: Boolean,
     selected: Boolean,
+    unpaired: Boolean,
     dropTarget: Boolean,
     onToggle: (String) -> Unit,
     onSelect: (String) -> Unit,
@@ -216,6 +460,7 @@ private fun FileRowItem(
     val background = when {
         dropTarget -> MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
         selected -> MaterialTheme.colorScheme.primaryContainer
+        unpaired -> MaterialTheme.colorScheme.onSurface.copy(alpha = 0.06f)
         else -> MaterialTheme.colorScheme.surface.copy(alpha = 0f)
     }
     val shape = RoundedCornerShape(8.dp)
@@ -289,9 +534,12 @@ private fun FileRowItem(
         )
         Text(
             text = entryName(path),
+            modifier = Modifier.weight(1f),
             color = MaterialTheme.colorScheme.onSurface,
             style = MaterialTheme.typography.bodyMedium,
             fontWeight = if (directory || selected) FontWeight.Medium else FontWeight.Normal,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
         )
     }
 }

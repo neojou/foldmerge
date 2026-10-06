@@ -2,6 +2,7 @@ package com.neojou.foldmerge.model
 
 import com.neojou.foldmerge.diff.BlockDecision
 import com.neojou.foldmerge.diff.HunkKind
+import com.neojou.foldmerge.diff.applySide
 import kotlinx.coroutines.runBlocking
 import kotlin.test.Test
 import kotlin.test.assertContentEquals
@@ -339,21 +340,113 @@ class FoldSessionTest {
     }
 
     @Test
-    fun subdirectoriesStartExpandedAndCanCollapse() = runBlocking {
+    fun subdirectoriesStartCollapsedAndCanExpand() = runBlocking {
         val files = MemoryWorkspace()
         files.put("/left/src/App.kt", "fun main() {}\n")
         files.put("/left/.secret", "no\n")
         val session = FoldSession(files)
         session.openRoot(Side.Left, "/left")
         assertEquals(listOf("src", "src/App.kt"), session.leftNodes.map { it.relativePath })
-        assertTrue("src" in session.leftExpanded)
-        val visible = visibleFileRows(session.leftNodes, session.leftExpanded).map { it.node.relativePath }
-        assertEquals(listOf("src", "src/App.kt"), visible)
-        session.toggleExpanded(Side.Left, "src")
+        assertTrue(session.leftExpanded.isEmpty())
         assertEquals(
             listOf("src"),
             visibleFileRows(session.leftNodes, session.leftExpanded).map { it.node.relativePath },
         )
+        session.toggleExpanded(Side.Left, "src")
+        assertEquals(
+            listOf("src", "src/App.kt"),
+            visibleFileRows(session.leftNodes, session.leftExpanded).map { it.node.relativePath },
+        )
+    }
+
+    @Test
+    fun insertBlankAboveShiftsOnlyThatSide() = runBlocking {
+        val files = MemoryWorkspace()
+        files.put("/left/a.txt", "a\nb\nc\n")
+        files.put("/right/a.txt", "a\nb\nc\n")
+        val session = openPair(files)
+        session.insertBlankAbove(Side.Left, 2)
+        val ready = assertIs<ComparePhase.Ready>(session.phase)
+        assertTrue(session.decisions.isEmpty())
+        assertEquals(listOf("a", "", "b", "c"), applySide(ready.hunks, session.decisions, onLeft = true))
+        assertEquals(listOf("a", "b", "c"), applySide(ready.hunks, session.decisions, onLeft = false))
+        session.insertBlankAbove(Side.Left, 0)
+        session.insertBlankAbove(Side.Left, 9)
+        val still = assertIs<ComparePhase.Ready>(session.phase)
+        assertEquals(listOf("a", "", "b", "c"), applySide(still.hunks, session.decisions, onLeft = true))
+    }
+
+    @Test
+    fun deleteLineRemovesOnlyThatRow() = runBlocking {
+        val files = MemoryWorkspace()
+        files.put("/left/a.txt", "a\nb\nc\n")
+        files.put("/right/a.txt", "a\nb\nc\n")
+        val session = openPair(files)
+        session.deleteLine(Side.Left, 2)
+        val ready = assertIs<ComparePhase.Ready>(session.phase)
+        assertTrue(session.decisions.isEmpty())
+        assertEquals(listOf("a", "c"), applySide(ready.hunks, session.decisions, onLeft = true))
+        assertEquals(listOf("a", "b", "c"), applySide(ready.hunks, session.decisions, onLeft = false))
+        session.deleteLine(Side.Left, 9)
+        val still = assertIs<ComparePhase.Ready>(session.phase)
+        assertEquals(listOf("a", "c"), applySide(still.hunks, session.decisions, onLeft = true))
+
+        session.deleteLine(Side.Right, 1)
+        session.deleteLine(Side.Right, 1)
+        session.deleteLine(Side.Right, 1)
+        val empty = assertIs<ComparePhase.Ready>(session.phase)
+        assertEquals(emptyList(), applySide(empty.hunks, session.decisions, onLeft = false))
+        assertEquals(listOf("a", "c"), applySide(empty.hunks, session.decisions, onLeft = true))
+        session.save(Side.Right)
+        assertEquals("", files.text("/right/a.txt"))
+        assertEquals("a\nb\nc\n", files.text("/left/a.txt"))
+    }
+
+    @Test
+    fun replaceLineKeepsTheOriginalNewlineAndTheOtherFile() = runBlocking {
+        val files = MemoryWorkspace()
+        files.put("/left/a.txt", "a\r\nb\r\nc\r\n")
+        files.put("/right/a.txt", "a\r\nb\r\nc\r\n")
+        val session = openPair(files)
+        session.replaceLine(Side.Left, 2, listOf("B", "X"))
+        session.save(Side.Left)
+        assertEquals("a\r\nB\r\nX\r\nc\r\n", files.text("/left/a.txt"))
+        assertEquals("a\r\nb\r\nc\r\n", files.text("/right/a.txt"))
+        assertFalse(session.canSave(Side.Left))
+    }
+
+    @Test
+    fun editAfterABlockCopyKeepsBothInTheSavedText() = runBlocking {
+        val files = MemoryWorkspace()
+        files.put("/left/a.txt", "a\nb\nc\n")
+        files.put("/right/a.txt", "a\nB\nc\n")
+        val session = openPair(files)
+        val ready = assertIs<ComparePhase.Ready>(session.phase)
+        val index = ready.hunks.indexOfFirst { it.kind != HunkKind.Equal }
+        session.decide(index, BlockDecision.CopyLeftToRight)
+        session.insertBlankAbove(Side.Right, 2)
+        assertTrue(session.decisions.isEmpty())
+        session.save(Side.Right)
+        assertEquals("a\n\nb\nc\n", files.text("/right/a.txt"))
+        assertEquals("a\nb\nc\n", files.text("/left/a.txt"))
+    }
+
+    @Test
+    fun lineEditWaitsWhileOverwriteIsUnanswered() = runBlocking {
+        val files = MemoryWorkspace()
+        files.put("/left/a.txt", "from-left\n")
+        files.put("/right/a.txt", "from-right\n")
+        val session = openPair(files)
+        val ready = assertIs<ComparePhase.Ready>(session.phase)
+        val index = ready.hunks.indexOfFirst { it.kind != HunkKind.Equal }
+        session.decide(index, BlockDecision.CopyRightToLeft)
+        files.put("/left/a.txt", "edited-outside\n")
+        session.save(Side.Left)
+        assertTrue(session.askOverwrite)
+        session.insertBlankAbove(Side.Left, 1)
+        session.replaceLine(Side.Left, 1, listOf("nope"))
+        assertEquals(BlockDecision.CopyRightToLeft, session.decisionAt(index))
+        assertEquals("edited-outside\n", files.text("/left/a.txt"))
     }
 
     private class FailingWrite(private val inner: MemoryWorkspace) : WorkspaceAccess by inner {

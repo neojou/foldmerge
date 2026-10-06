@@ -30,6 +30,13 @@ class TextAndHunkTest {
     }
 
     @Test
+    fun editorTextKeepsInternalBlankLines() {
+        assertEquals(listOf("a", "", "b"), linesFromEditor("a\n\nb\n"))
+        assertEquals(listOf("a", "b"), linesFromEditor("a\nb"))
+        assertEquals(listOf(""), linesFromEditor(""))
+    }
+
+    @Test
     fun identicalFilesAreOneEqualBlock() {
         val hunks = diffHunks(listOf("a", "b"), listOf("a", "b"))
         assertEquals(1, hunks.size)
