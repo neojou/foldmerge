@@ -7,6 +7,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
+import org.jetbrains.compose.resources.painterResource
 import java.awt.Desktop
 import java.awt.Dimension
 import java.awt.EventQueue
@@ -34,6 +35,7 @@ fun main() {
         Window(
             onCloseRequest = ::exitApplication,
             title = AppVersion.APP_NAME,
+            icon = painterResource(Res.drawable.app_icon),
             state = windowState,
         ) {
             window.minimumSize = Dimension(960, 680)

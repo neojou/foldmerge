@@ -23,7 +23,7 @@ const val NAME: String = "0.1" // configure:app.version
 
 - About 第二行。`HomeScreen.kt` 的 `AboutDialog` 顯示 `Version ` 加上 `AppVersion.NAME`，例如 `Version 0.1`。Top Menu 的 About 與 macOS 系統選單的 About 是同一個對話框，所以兩邊的版號相同。
 - Gradle 專案版本。`composeApp/build.gradle.kts` 的 `version` 讀 `app.version`。jar 名稱會帶這個版號。
-- 桌面套件版號。同一個檔案的 `nativeDistributions.packageVersion` 也讀 `app.version`。以後打成 dmg 或 pkg 時，套件版號就是這個值。macOS 選單的 About 仍走上面的對話框，不會改顯示 JDK 版號。
+- 桌面套件版號。同一個檔案的 `nativeDistributions.packageVersion` 讀 `app.version`。Compose 的 DMG 要求主版號大於 0，所以產品版號若是 `0.3`，安裝檔會寫成 `1.3.0`。About 仍顯示產品版號。見 `How-To-Build_macOS_DMG.md`。
 
 ## 用指令改版號
 
@@ -35,7 +35,7 @@ const val NAME: String = "0.1" // configure:app.version
 
 已經是這個版號時，指令只印出現況，不改檔案。
 
-這個格式同時符合 macOS dmg 與 pkg 的要求。Windows 的 msi 與 exe 要求正好三段，例如 `0.2.0`。以後若要打 Windows 安裝檔，請把參數寫成三段。
+產品版號可以是 `0.2`。Compose 打 DMG 時主版號必須大於 0，所以 `0.2` 的安裝檔會寫成 `1.2.0`。Windows 的 msi 與 exe 要求正好三段，例如 `0.2.0`。以後若要打 Windows 安裝檔，請把參數寫成三段。
 
 ## 指令故意不改的版號
 
